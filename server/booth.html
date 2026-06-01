@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ender's Party &mdash; Live Photo Booth</title>
+    <style>
+        :root {
+            --navy:  #0d1520;
+            --gold:  #c9a227;
+            --gold2: #e2b83a;
+        }
+
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        html { -webkit-font-smoothing: antialiased; }
+
+        body {
+            background: var(--navy);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* star field */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background-image:
+                radial-gradient(rgba(201,162,39,0.07) 1px, transparent 1px),
+                radial-gradient(rgba(255,255,255,0.025) 1px, transparent 1px);
+            background-size: 40px 40px, 22px 22px;
+            background-position: 0 0, 11px 11px;
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* ── header ── */
+        .site-header {
+            position: relative;
+            z-index: 10;
+            padding: 40px 32px 28px;
+            text-align: center;
+            border-bottom: 1px solid rgba(201,162,39,0.15);
+        }
+
+        .header-title {
+            font-family: Georgia, 'Times New Roman', serif;
+            font-size: clamp(1.8rem, 5vw, 3rem);
+            font-weight: 400;
+            color: #fff;
+            line-height: 1.1;
+        }
+
+        .header-rule {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 14px;
+            margin: 14px auto;
+            max-width: 260px;
+        }
+        .h-line    { flex: 1; height: 1px; background: rgba(201,162,39,0.35); }
+        .h-diamond { color: var(--gold); font-size: 0.6rem; }
+
+        /* ── status bar ── */
+        .status-bar {
+            position: relative;
+            z-index: 10;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 24px;
+            padding: 12px 24px;
+            background: rgba(255,255,255,0.04);
+            border-bottom: 1px solid rgba(201,162,39,0.1);
+            font-size: 0.78rem;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: rgba(255,255,255,0.45);
+        }
+
+        .status-count { color: var(--gold); font-weight: 700; }
+
+        .ws-dot {
+            display: inline-block;
+            width: 7px; height: 7px;
+            border-radius: 50%;
+            background: #555;
+            margin-right: 6px;
+            transition: background 0.3s;
+        }
+        .ws-dot.live { background: #3cdc78; box-shadow: 0 0 6px #3cdc78; }
+
+        /* ── masonry grid ── */
+        .collage-grid {
+            position: relative;
+            z-index: 5;
+            columns: 4;
+            column-gap: 18px;
+            padding: 40px 36px 80px;
+            max-width: 1500px;
+            margin: 0 auto;
+        }
+
+        @media (max-width: 1200px) { .collage-grid { columns: 3; } }
+        @media (max-width: 800px)  { .collage-grid { columns: 2; column-gap: 12px; padding: 24px 16px 60px; } }
+        @media (max-width: 480px)  { .collage-grid { columns: 1; } }
+
+        /* ── polaroid card (exact match to collage.html) ── */
+        .photo-card {
+            display: inline-block;
+            width: 100%;
+            break-inside: avoid;
+            margin-bottom: 18px;
+            background: #fff;
+            padding: 10px 10px 38px;
+            border-radius: 2px;
+            box-shadow:
+                0 6px 24px rgba(0,0,0,0.45),
+                0 2px 6px rgba(0,0,0,0.25);
+            transition: transform 0.35s cubic-bezier(0.25,0.46,0.45,0.94),
+                        box-shadow 0.35s ease;
+            cursor: default;
+        }
+
+        .photo-card img {
+            width: 100%;
+            display: block;
+            border-radius: 1px;
+            object-fit: cover;
+        }
+
+        .photo-card figcaption {
+            text-align: center;
+            font-family: -apple-system, sans-serif;
+            font-size: 0.72rem;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: #888;
+            margin-top: 10px;
+            line-height: 1;
+        }
+
+        /* fixed rotations for grid stability */
+        .photo-card:nth-child(7n+1) { transform: rotate(-2.6deg); }
+        .photo-card:nth-child(7n+2) { transform: rotate(1.9deg);  }
+        .photo-card:nth-child(7n+3) { transform: rotate(-3.2deg); }
+        .photo-card:nth-child(7n+4) { transform: rotate(2.4deg);  }
+        .photo-card:nth-child(7n+5) { transform: rotate(-1.5deg); }
+        .photo-card:nth-child(7n+6) { transform: rotate(3.0deg);  }
+        .photo-card:nth-child(7n+7) { transform: rotate(-2.1deg); }
+
+        .photo-card:hover {
+            transform: rotate(0deg) scale(1.04) translateY(-6px) !important;
+            box-shadow:
+                0 18px 48px rgba(0,0,0,0.55),
+                0 0 0 2px rgba(201,162,39,0.6);
+            z-index: 100;
+            position: relative;
+        }
+
+        /* ── slide-in animation for new photos ── */
+        @keyframes drop-in {
+            from {
+                opacity: 0;
+                transform: translateY(-40px) scale(0.92);
+            }
+            to {
+                opacity: 1;
+            }
+        }
+
+        .photo-card.new {
+            animation: drop-in 0.55s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+        }
+
+        /* ── empty state ── */
+        .empty-state {
+            position: relative;
+            z-index: 5;
+            text-align: center;
+            padding: 100px 24px;
+            color: rgba(255,255,255,0.2);
+            font-family: Georgia, serif;
+            font-style: italic;
+            font-size: 1.1rem;
+            letter-spacing: 0.04em;
+        }
+
+        /* ── footer ── */
+        .site-footer {
+            position: relative;
+            z-index: 5;
+            text-align: center;
+            padding: 32px 24px 44px;
+            border-top: 1px solid rgba(201,162,39,0.1);
+            font-family: Georgia, serif;
+            font-style: italic;
+            color: rgba(255,255,255,0.25);
+            font-size: 0.85rem;
+        }
+    </style>
+</head>
+<body>
+
+    <header class="site-header">
+        <h1 class="header-title">Live Photo Booth</h1>
+        <div class="header-rule">
+            <span class="h-line"></span>
+            <span class="h-diamond">&#10022;</span>
+            <span class="h-line"></span>
+        </div>
+    </header>
+
+    <div class="status-bar">
+        <span><span class="ws-dot" id="wsDot"></span><span id="wsLabel">connecting&hellip;</span></span>
+        <span><span class="status-count" id="photoCount">0</span>&nbsp;photos taken</span>
+    </div>
+
+    <main class="collage-grid" id="grid"></main>
+
+    <div class="empty-state" id="emptyState">Waiting for the first photo&hellip;</div>
+
+    <footer class="site-footer">
+        Robert Ender Woodward &nbsp;&middot;&nbsp; Class of 2026
+    </footer>
+
+    <script>
+        var grid       = document.getElementById('grid');
+        var emptyState = document.getElementById('emptyState');
+        var photoCount = document.getElementById('photoCount');
+        var wsDot      = document.getElementById('wsDot');
+        var wsLabel    = document.getElementById('wsLabel');
+        var count      = 0;
+
+        function setStatus(live, label) {
+            wsDot.className  = 'ws-dot' + (live ? ' live' : '');
+            wsLabel.textContent = label;
+        }
+
+        function addPhoto(filename, cam, isNew) {
+            if (count === 0) emptyState.style.display = 'none';
+            count++;
+            photoCount.textContent = count;
+
+            var fig = document.createElement('figure');
+            fig.className = 'photo-card' + (isNew ? ' new' : '');
+
+            var img = document.createElement('img');
+            img.src = '/photos/' + filename;
+            img.alt = cam === 'existing' ? 'Party photo' : 'Photo from ' + cam;
+            img.loading = 'lazy';
+
+            var cap = document.createElement('figcaption');
+            cap.textContent = cam === 'existing' ? '' : cam;
+
+            fig.appendChild(img);
+            fig.appendChild(cap);
+
+            // Prepend so newest is at top
+            grid.insertBefore(fig, grid.firstChild);
+
+            // Remove animation class after it plays so hover CSS works cleanly
+            if (isNew) {
+                fig.addEventListener('animationend', function() {
+                    fig.classList.remove('new');
+                }, { once: true });
+            }
+        }
+
+        function connect() {
+            var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            var ws    = new WebSocket(proto + '//' + location.host + '/ws');
+
+            ws.onopen = function() {
+                setStatus(true, 'live');
+            };
+
+            ws.onclose = function() {
+                setStatus(false, 'reconnecting…');
+                setTimeout(connect, 3000);
+            };
+
+            ws.onerror = function() {
+                setStatus(false, 'connection error');
+            };
+
+            ws.onmessage = function(ev) {
+                var data = JSON.parse(ev.data);
+                if (data.photo) {
+                    addPhoto(data.photo, data.cam || '', !data.existing);
+                }
+            };
+        }
+
+        connect();
+    </script>
+</body>
+</html>
