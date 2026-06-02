@@ -1,0 +1,40 @@
+{
+  "name": "k10",
+  "version": "1.0.0",
+  "description": "UniHiker K10 (ESP32-S3) development — hardware API, firmware deployment, recovery, REPL probing, and gallery server",
+  "author": {
+    "name": "Brandon Woodward"
+  },
+  "skills": [
+    {
+      "name": "k10",
+      "description": "UniHiker K10 hardware API reference, boot order, hard-fault traps, and project status. Use as the default entry point for any K10 work.",
+      "path": "commands/k10.md"
+    },
+    {
+      "name": "k10-recover",
+      "description": "Recover a bricked/hung/corrupt-FS K10 via esptool erase + reflash + filesystem reformat. Use when serial writes time out or device is unresponsive.",
+      "path": "commands/k10-recover.md"
+    },
+    {
+      "name": "k10-deploy",
+      "description": "Deploy firmware to a healthy K10 via mpremote. Covers boot guard timing, config patching per CAM_ID, and verification.",
+      "path": "commands/k10-deploy.md"
+    },
+    {
+      "name": "k10-flash",
+      "description": "Full flash from blank — esptool erase + write firmware + reformat FS + deploy booth code. The complete sequence for a new or fully bricked device.",
+      "path": "commands/k10-flash.md"
+    },
+    {
+      "name": "k10-probe",
+      "description": "Connect to K10 REPL interactively — serial connection, paste mode execution, testing APIs, reading attributes. Use when experimenting with hardware.",
+      "path": "commands/k10-probe.md"
+    },
+    {
+      "name": "k10-server",
+      "description": "Gallery server setup — FastAPI + RGB565 decode + WebSocket live gallery. Includes macOS-specific notes and dependency install.",
+      "path": "commands/k10-server.md"
+    }
+  ]
+}
