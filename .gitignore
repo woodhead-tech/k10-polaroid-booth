@@ -1,0 +1,8 @@
+# Live venue config — holds the WiFi password. Use booth_config.example.py as the template.
+firmware/booth_config.py
+
+# Server runtime
+server/photos/
+server/.venv/
+__pycache__/
+*.pyc

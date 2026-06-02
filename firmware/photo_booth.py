@@ -1,16 +1,44 @@
 # UniHiker K10 — Polaroid Photo Booth
-# MicroPython — deploy via upload_booth.sh
+# MicroPython (k10_micropython_v0.9.8 / MicroPython 1.26). Deploy as /main.py.
 #
-# Controls:
-#   Short press (<600ms) — instant capture
-#   Long press  (≥600ms) — 3-2-1 countdown then capture
+# TAP THE SCREEN to take a photo (3-2-1 countdown, then capture + upload).
 #
-# Before deploying: verify camera and button APIs in REPL:
-#   from k10_base import *; print(dir(k10_base))
-#   cam = Camera(); print(dir(cam))
+# Hard-won facts baked into this file (see the /k10 skill for the full story):
+#   * Camera.camera_capture() -> 153600 bytes raw RGB565 (240x320). The server
+#     decodes BGR;16 and applies the polaroid frame.
+#   * Screen singleton: `from unihiker_k10 import screen`. NEVER `import
+#     unihiker_k10` (bare) or `k10_base.Screen()` — both hard-fault.
+#   * The A/B face buttons share GPIO5/GPIO11 with the camera's parallel bus and
+#     are UNUSABLE while the camera is initialized. Trigger is the touchscreen
+#     (FT6336 on I2C(0) @ 0x38), which is independent of the camera. VERIFIED:
+#     touch detection + camera_capture() + upload all work together.
+#   * Connect WiFi BEFORE screen.init() (display framebuffer starves WiFi DMA).
+#   * Do NOT use asyncio: the event loop conflicts with the camera. Plain sync loop.
+#
+# OPEN ISSUE (work in progress — booth does NOT yet fully run on cold boot):
+#   Manual screen draws (show_bg/draw_text/show_draw) race with the camera's DMA
+#   and HANG on a cold boot — the hang point varies (a draw, a sleep, a tight
+#   loop), which is the signature of a DMA race. screen.stop_camera() tames this
+#   when reached via `mpremote run` (soft reset) but NOT reliably on a fresh cold
+#   boot. What DOES work on cold boot: camera init + screen.init + touch-poll +
+#   camera_capture + upload, as long as we never manually draw to the screen.
+#   NEXT: drive the UI with screen.show_camera_feed(<1 arg>) — a live viewfinder
+#   that the firmware coordinates with the camera DMA — instead of manual draws,
+#   so there is no concurrent manual-draw vs camera-DMA conflict. The draw-based
+#   screens below (show_ready/countdown/etc.) are the source of the cold-boot hang.
 
 import utime
-import uasyncio as asyncio
+import sys
+import select
+
+# Boot guard: active stdin poll. Any byte within 3s aborts to the REPL. A plain
+# utime.sleep() does NOT work as a guard on USB-Serial-JTAG (it never reads stdin),
+# and without a working guard a crashing main.py needs a full esptool reflash.
+print("booth boot guard: press any key within 3s to abort to REPL")
+_guard = select.poll()
+_guard.register(sys.stdin, select.POLLIN)
+if _guard.poll(3000):
+    sys.exit()
 
 try:
     import urequests as requests
@@ -18,8 +46,8 @@ try:
 except ImportError:
     HAS_HTTP = False
 
-from k10_base import WiFi, Button, Camera
-from unihiker_k10 import screen
+import k10_base
+from k10_base import WiFi, Camera
 from booth_config import SSID, PASSWORD, SERVER_URL, CAM_ID, EVENT
 
 # ── display constants ─────────────────────────────────────────────────────────
@@ -34,7 +62,29 @@ RED    = 0xE63C3C
 GRAY   = 0x505564
 DGRAY  = 0x1E2130
 
-LONG_PRESS_MS = 600  # threshold for countdown vs instant
+# ── camera ──────────────────────────────────────────────────────────────────
+# Init the camera FIRST, before importing the screen singleton.
+_cam = Camera()
+_cam.init()
+
+from unihiker_k10 import screen  # noqa: E402 — must come after cam.init()
+
+
+def camera_capture() -> bytes:
+    return _cam.camera_capture()
+
+
+# ── touch (FT6336 on the shared I2C bus) ──────────────────────────────────────
+_i2c = k10_base.k10_i2c
+_TOUCH_ADDR = 0x38
+
+
+def touched() -> bool:
+    """True while a finger is on the screen. Register 0x02 low nibble = touch count."""
+    try:
+        return (_i2c.readfrom_mem(_TOUCH_ADDR, 0x02, 1)[0] & 0x0F) > 0
+    except Exception:
+        return False
 
 
 # ── drawing helpers ───────────────────────────────────────────────────────────
@@ -49,38 +99,32 @@ def _t(text, x, y, sz, c):
 # ── screens ───────────────────────────────────────────────────────────────────
 
 def show_ready():
-    """Main standby screen."""
     screen.show_bg(color=BG)
     _r(0, 0, W, 28, DGRAY)
     _t(CAM_ID, 6, 6, 14, GOLD)
     _t(EVENT[:20], W - 6 - len(EVENT[:20]) * 7, 6, 14, GRAY)
 
-    # Center: camera icon (simple box representation)
-    _r(80, 100, 80, 60, DGRAY)       # body
-    _r(104, 90, 32, 14, DGRAY)       # viewfinder bump
-    _r(96, 108, 48, 44, BG)          # lens surround
-    _r(108, 120, 24, 20, GRAY)       # lens glass
+    # camera icon
+    _r(80, 100, 80, 60, DGRAY)
+    _r(104, 90, 32, 14, DGRAY)
+    _r(96, 108, 48, 44, BG)
+    _r(108, 120, 24, 20, GRAY)
 
-    _t("READY", 84, 180, 20, WHITE)
-    _t("short = instant", 40, 220, 12, GRAY)
-    _t("hold  = 3s delay", 40, 238, 12, GRAY)
+    _t("TAP TO SNAP", 52, 190, 18, WHITE)
     screen.show_draw()
 
 
 def show_countdown(n):
-    """Display countdown digit."""
     screen.show_bg(color=BG)
     _r(0, 0, W, 28, DGRAY)
     _t(CAM_ID, 6, 6, 14, GOLD)
     color = RED if n == 1 else GOLD if n == 2 else WHITE
-    # Large countdown number
     _t(str(n), W // 2 - 18, H // 2 - 40, 72, color)
     _t("SMILE!", 70, H // 2 + 50, 18, GRAY)
     screen.show_draw()
 
 
 def show_flash():
-    """White flash frame on capture."""
     screen.show_bg(color=WHITE)
     screen.show_draw()
     utime.sleep_ms(80)
@@ -107,70 +151,19 @@ def show_done(ok):
     utime.sleep_ms(1200)
 
 
-# ── camera ────────────────────────────────────────────────────────────────────
-
-# Camera API is not yet verified on this hardware. The code below tries each
-# known pattern in order and remembers which one worked. On first successful
-# capture the working method is printed to serial for future reference.
-# To inspect manually in REPL: from k10_base import Camera; print(dir(Camera()))
-
-_cam = Camera()
-_cam_method = None   # set on first successful capture
-
-
-def camera_capture() -> bytes:
-    """Return raw JPEG bytes, auto-discovering the capture API on first call."""
-    global _cam_method
-
-    if _cam_method == 'capture':
-        return _cam.capture()
-    if _cam_method == 'snapshot':
-        _cam.snapshot('/booth_snap.jpg')
-        with open('/booth_snap.jpg', 'rb') as f:
-            return f.read()
-
-    # First call: probe available methods
-    methods = dir(_cam)
-    print("Camera methods:", methods)
-
-    if 'capture' in methods:
-        try:
-            data = _cam.capture()
-            if data and len(data) > 100:
-                _cam_method = 'capture'
-                print("Camera API: cam.capture() ✓")
-                return data
-        except Exception as e:
-            print("capture() failed:", e)
-
-    if 'snapshot' in methods:
-        try:
-            _cam.snapshot('/booth_snap.jpg')
-            with open('/booth_snap.jpg', 'rb') as f:
-                data = f.read()
-            if data and len(data) > 100:
-                _cam_method = 'snapshot'
-                print("Camera API: cam.snapshot() ✓")
-                return data
-        except Exception as e:
-            print("snapshot() failed:", e)
-
-    # Last resort: dump all available attrs to serial for debugging
-    print("ERROR: no working camera method found. dir(cam):", methods)
-    raise RuntimeError("camera API unknown — check serial output for dir(cam)")
-
-
 # ── upload ────────────────────────────────────────────────────────────────────
 
-def upload(jpeg: bytes) -> bool:
+def upload(raw: bytes) -> bool:
     if not HAS_HTTP:
         return False
     try:
         r = requests.post(
             SERVER_URL + "/upload",
-            data=jpeg,
+            data=raw,
             headers={
-                "Content-Type": "image/jpeg",
+                "Content-Type": "image/x-rgb565",
+                "X-Width":      "240",
+                "X-Height":     "320",
                 "X-Cam-Id":     CAM_ID,
                 "X-Event":      EVENT,
             },
@@ -184,69 +177,31 @@ def upload(jpeg: bytes) -> bool:
 
 # ── capture flow ──────────────────────────────────────────────────────────────
 
-async def countdown_and_shoot():
+def do_shoot():
     for n in (3, 2, 1):
         show_countdown(n)
-        await asyncio.sleep(1)
-    await do_shoot()
-
-
-async def instant_shoot():
-    await do_shoot()
-
-
-async def do_shoot():
+        utime.sleep_ms(1000)
     show_flash()
-    jpeg = camera_capture()
+    raw = camera_capture()
     show_uploading()
-    ok = upload(jpeg)
+    ok = upload(raw)
     show_done(ok)
-    show_ready()
-
-
-# ── button task ───────────────────────────────────────────────────────────────
-
-# NOTE: Verify button API before first deploy.
-# In REPL: from k10_base import Button; b = Button(); print(dir(b))
-# Common: b.is_pressed() → bool
-# Some K10 builds expose Button(pin) or ButtonA/ButtonB.
-
-_btn = Button()
-_shooting = False
-
-
-async def task_button():
-    global _shooting
-    btn_down = None
-    while True:
-        pressed = _btn.is_pressed()
-        if pressed and btn_down is None:
-            btn_down = utime.ticks_ms()
-        elif not pressed and btn_down is not None:
-            held = utime.ticks_diff(utime.ticks_ms(), btn_down)
-            btn_down = None
-            if not _shooting:
-                _shooting = True
-                if held >= LONG_PRESS_MS:
-                    await countdown_and_shoot()
-                else:
-                    await instant_shoot()
-                _shooting = False
-        await asyncio.sleep_ms(20)
 
 
 # ── boot ──────────────────────────────────────────────────────────────────────
 
-async def main():
-    screen.init(dir=SCREEN_DIR)
-    screen.show_bg(color=BG)
-    _t("connecting...", 54, H // 2 - 8, 14, GRAY)
-    screen.show_draw()
-
+def boot():
+    """Connect WiFi BEFORE screen.init() (the display framebuffer would starve the
+    WiFi DMA), then init the screen and immediately stop_camera() to halt the
+    preview DMA that otherwise hangs every delay/draw."""
     wifi = WiFi()
     wifi.connect(ssid=SSID, psd=PASSWORD, timeout=30000)
+    connected = wifi.status()
 
-    if wifi.status():
+    screen.init(dir=SCREEN_DIR)
+    screen.stop_camera()
+
+    if connected:
         screen.show_bg(color=BG)
         _t("wifi ok", 78, H // 2 - 8, 14, GREEN)
         screen.show_draw()
@@ -256,10 +211,22 @@ async def main():
         _t("wifi failed", 60, H // 2 - 8, 14, RED)
         _t("check config", 54, H // 2 + 14, 12, GRAY)
         screen.show_draw()
-        utime.sleep(4)
+        utime.sleep_ms(3000)
 
+
+def run():
     show_ready()
-    await task_button()
+    armed = True
+    while True:
+        if touched():
+            if armed:
+                armed = False
+                do_shoot()
+                show_ready()
+        else:
+            armed = True   # require finger lift before the next shot
+        utime.sleep_ms(40)
 
 
-asyncio.run(main())
+boot()
+run()
