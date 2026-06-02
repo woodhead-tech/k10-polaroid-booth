@@ -183,26 +183,22 @@ def upload_and_reset(frames):
 show_ready(0)
 print("booth ready -", CAM_ID)
 buffer = []
-armed = True
 
 while True:
+    # Wait for button press (rising edge only)
     if _btn_a.value() == 1:
-        if armed:
-            armed = False
-            show_flash()
-            raw = _cam.camera_capture()
-            buffer.append(raw)
-            count = len(buffer)
-            print(f"captured ({count}/{BATCH_SIZE})")
-            show_captured(count)
-            if count >= BATCH_SIZE:
-                upload_and_reset(buffer)
-            else:
-                show_ready(count)
-            # Debounce: wait for release + cooldown
-            while _btn_a.value() == 1:
-                utime.sleep_ms(20)
-            utime.sleep_ms(200)
-    else:
-        armed = True
-    utime.sleep_ms(40)
+        show_flash()
+        raw = _cam.camera_capture()
+        buffer.append(raw)
+        count = len(buffer)
+        print(f"captured ({count}/{BATCH_SIZE})")
+        show_captured(count)
+        if count >= BATCH_SIZE:
+            upload_and_reset(buffer)
+        else:
+            show_ready(count)
+        # Block until button fully released, then cooldown
+        while _btn_a.value() == 1:
+            utime.sleep_ms(10)
+        utime.sleep_ms(500)
+    utime.sleep_ms(30)
