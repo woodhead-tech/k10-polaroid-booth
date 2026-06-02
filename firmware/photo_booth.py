@@ -42,6 +42,15 @@ from booth_config import SSID, PASSWORD, SERVER_URL, CAM_ID, EVENT
 _cam = Camera()
 _cam.init()
 
+# -- clear display to black (works before WiFi claims DMA) --
+from unihiker_k10 import screen  # noqa: E402
+screen.init(dir=2)
+screen.stop_camera()
+screen.show_bg(color=0x000000)
+screen.show_draw()
+screen.deinit()
+del screen
+
 # -- WiFi (second — claims remaining GDMA channels) --
 _wifi = WiFi()
 _wifi.connect(ssid=SSID, psd=PASSWORD, timeout=30000)
