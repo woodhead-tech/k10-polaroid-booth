@@ -4,5 +4,6 @@ firmware/booth_config.py
 # Server runtime
 server/photos/
 server/.venv/
+server/.env
 __pycache__/
 *.pyc

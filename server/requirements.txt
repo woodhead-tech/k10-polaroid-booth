@@ -3,3 +3,5 @@ uvicorn[standard]
 pillow
 websockets
 python-multipart
+google-genai
+python-dotenv
