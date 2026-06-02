@@ -225,27 +225,38 @@ async def upload(request: Request):
     # Decode the raw frame
     img = decode_frame(body, content_type, width, height)
 
-    # Apply AI style if enabled (non-blocking — falls back to original on failure)
-    styled_img = await apply_ai_style(img)
-    final_img = styled_img if styled_img is not None else img
-
-    # Apply polaroid frame
-    polaroid = make_polaroid(final_img, event)
-    filepath.write_bytes(polaroid)
-
-    # Save the raw original (no frame, no style) for reference
+    # Save raw original immediately
     raw_path = PHOTOS_DIR / f"{ts}_{cam_id}_raw.jpg"
     raw_buf = io.BytesIO()
     img.save(raw_buf, "JPEG", quality=92)
     raw_path.write_bytes(raw_buf.getvalue())
 
-    # Save an unfiltered polaroid (frame only, no AI style) as backup
+    # Save clean polaroid (frame only, no style) immediately
     clean_polaroid = make_polaroid(img, event)
     clean_path = PHOTOS_DIR / f"{ts}_{cam_id}_clean.jpg"
     clean_path.write_bytes(clean_polaroid)
 
+    # Write clean polaroid as the initial gallery version (instant feedback)
+    filepath.write_bytes(clean_polaroid)
     await hub.broadcast({"photo": filename, "cam": cam_id})
-    return {"ok": True, "filename": filename, "styled": styled_img is not None}
+
+    # Apply AI style in background — overwrites the gallery file when done
+    asyncio.create_task(_style_and_replace(img, event, filepath, filename, cam_id))
+
+    return {"ok": True, "filename": filename}
+
+
+async def _style_and_replace(img: Image.Image, event: str, filepath: Path, filename: str, cam_id: str):
+    """Background task: apply AI style and replace the gallery polaroid."""
+    try:
+        styled_img = await apply_ai_style(img)
+        if styled_img is not None:
+            polaroid = make_polaroid(styled_img, event)
+            filepath.write_bytes(polaroid)
+            # Notify gallery to refresh this photo
+            await hub.broadcast({"photo": filename, "cam": cam_id, "updated": True})
+    except Exception as e:
+        print(f"[style-bg] error: {e}")
 
 
 @app.get("/")

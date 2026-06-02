@@ -108,37 +108,42 @@ def upload_batch(frames):
     if not HAS_HTTP or not frames:
         return 0
 
-    wifi = WiFi()
-    wifi.connect(ssid=SSID, psd=PASSWORD, timeout=20000)
-    if not wifi.status():
-        print("wifi failed")
-        return 0
-
     ok_count = 0
-    for raw in frames:
+    try:
+        wifi = WiFi()
+        wifi.connect(ssid=SSID, psd=PASSWORD, timeout=15000)
+        if not wifi.status():
+            print("wifi failed")
+            return 0
+
+        for raw in frames:
+            try:
+                r = requests.post(
+                    SERVER_URL + "/upload",
+                    data=raw,
+                    headers={
+                        "Content-Type": "image/x-rgb565",
+                        "X-Width": "240",
+                        "X-Height": "320",
+                        "X-Cam-Id": CAM_ID,
+                        "X-Event": EVENT,
+                    },
+                    timeout=30,
+                )
+                if r.status_code == 200:
+                    ok_count += 1
+                r.close()
+            except Exception as e:
+                print("upload err:", e)
+    finally:
+        # Always disconnect WiFi to free DMA, even on failure
         try:
-            r = requests.post(
-                SERVER_URL + "/upload",
-                data=raw,
-                headers={
-                    "Content-Type": "image/x-rgb565",
-                    "X-Width": "240",
-                    "X-Height": "320",
-                    "X-Cam-Id": CAM_ID,
-                    "X-Event": EVENT,
-                },
-            )
-            if r.status_code == 200:
-                ok_count += 1
-            r.close()
+            wlan = network.WLAN(network.STA_IF)
+            wlan.disconnect()
+            wlan.active(False)
         except Exception:
             pass
-
-    # Disconnect WiFi to free DMA
-    wlan = network.WLAN(network.STA_IF)
-    wlan.disconnect()
-    wlan.active(False)
-    utime.sleep_ms(300)
+        utime.sleep_ms(300)
 
     return ok_count
 
@@ -166,13 +171,18 @@ while True:
                 screen_show_uploading(len(buffer))
                 screen_stop()
                 gc.collect()
-                ok = upload_batch(buffer)
-                print(f"uploaded {ok}/{len(buffer)}")
+                try:
+                    ok = upload_batch(buffer)
+                    print(f"uploaded {ok}/{len(buffer)}")
+                except Exception as e:
+                    print("batch error:", e)
+                    ok = 0
+                total = len(buffer)
                 buffer.clear()
                 gc.collect()
-                # Re-init screen + viewfinder
+                # Always re-init screen + viewfinder
                 screen_start()
-                screen_show_done(ok, BATCH_SIZE)
+                screen_show_done(ok, total)
                 utime.sleep_ms(800)
                 screen.show_camera(_cam)
     else:
