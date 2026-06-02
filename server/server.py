@@ -130,36 +130,76 @@ def make_polaroid(img: Image.Image, caption: str) -> bytes:
     return out.getvalue()
 
 
+def apply_vintage_filter(img: Image.Image) -> Image.Image:
+    """Apply a vintage instant-film look: warm tones, subtle vignette, film grain."""
+    from PIL import ImageFilter, ImageEnhance
+
+    img = img.copy()
+    w, h = img.size
+
+    # Warm color shift (boost reds/yellows, reduce blues)
+    r, g, b = img.split()
+    r = r.point(lambda x: min(255, int(x * 1.08)))
+    g = g.point(lambda x: min(255, int(x * 1.02)))
+    b = b.point(lambda x: int(x * 0.88))
+    img = Image.merge("RGB", (r, g, b))
+
+    # Slight contrast reduction + warmth (mimics film)
+    img = ImageEnhance.Contrast(img).enhance(0.92)
+    img = ImageEnhance.Color(img).enhance(0.9)
+    img = ImageEnhance.Brightness(img).enhance(1.03)
+
+    # Subtle vignette — radial gradient mask (white center fading to dark edges)
+    import math
+    vignette = Image.new("L", (w, h), 255)
+    cx, cy = w / 2, h / 2
+    max_dist = math.sqrt(cx * cx + cy * cy)
+    pixels = vignette.load()
+    for y in range(h):
+        for x in range(w):
+            dist = math.sqrt((x - cx) ** 2 + (y - cy) ** 2)
+            # Start darkening at 60% of max distance, darken to 70% brightness at edges
+            factor = max(0, (dist / max_dist - 0.6) / 0.4)
+            pixels[x, y] = int(255 * (1 - factor * 0.3))
+    img = Image.composite(img, Image.new("RGB", (w, h), (15, 10, 5)), vignette)
+
+    # Film grain overlay
+    grain = Image.effect_noise((w, h), 20).convert("RGB")
+    img = Image.blend(img, grain, 0.04)
+
+    return img
+
+
 async def apply_ai_style(img: Image.Image) -> Image.Image | None:
-    """Run image through Gemini for style transfer. Returns styled image or None on failure."""
-    if not STYLE_ENABLED:
-        return None
-    try:
-        img_bytes = io.BytesIO()
-        img.save(img_bytes, format="JPEG", quality=90)
-        img_bytes.seek(0)
+    """Run image through Gemini for AI style transfer, or Pillow vintage filter as fallback."""
+    if STYLE_ENABLED:
+        try:
+            img_bytes = io.BytesIO()
+            img.save(img_bytes, format="JPEG", quality=90)
+            img_bytes.seek(0)
 
-        image_part = types.Part.from_bytes(data=img_bytes.getvalue(), mime_type="image/jpeg")
+            image_part = types.Part.from_bytes(data=img_bytes.getvalue(), mime_type="image/jpeg")
 
-        response = await asyncio.to_thread(
-            _genai_client.models.generate_content,
-            model="gemini-2.0-flash-exp",
-            contents=[STYLE_PROMPT, image_part],
-            config=types.GenerateContentConfig(
-                response_modalities=["IMAGE", "TEXT"],
-            ),
-        )
+            response = await asyncio.to_thread(
+                _genai_client.models.generate_content,
+                model="gemini-2.5-flash-image",
+                contents=[STYLE_PROMPT, image_part],
+                config=types.GenerateContentConfig(
+                    response_modalities=["IMAGE", "TEXT"],
+                ),
+            )
 
-        # Extract generated image from response
-        for part in response.candidates[0].content.parts:
-            if hasattr(part, "inline_data") and part.inline_data and part.inline_data.mime_type.startswith("image/"):
-                return Image.open(io.BytesIO(part.inline_data.data)).convert("RGB")
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, "inline_data") and part.inline_data and part.inline_data.mime_type.startswith("image/"):
+                    print("[style] AI style applied via Gemini")
+                    return Image.open(io.BytesIO(part.inline_data.data)).convert("RGB")
 
-        print("[style] No image in Gemini response — using original")
-        return None
-    except Exception as e:
-        print(f"[style] AI processing failed: {e} — using original")
-        return None
+            print("[style] No image in Gemini response — falling back to vintage filter")
+        except Exception as e:
+            print(f"[style] Gemini failed: {type(e).__name__} — using vintage filter")
+
+    # Pillow vintage filter (always available, instant)
+    return apply_vintage_filter(img)
 
 
 # -- Routes --
