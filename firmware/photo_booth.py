@@ -9,15 +9,21 @@
 # the cold-boot DMA hang that plagued the old manual-draw-based idle screen.
 #
 # Boot order (critical — verified 2026-06-02):
-#   1. Camera init (before screen import)
-#   2. WiFi connect (before screen.init — display framebuffer starves WiFi DMA)
-#   3. screen.init(dir=2)
-#   4. screen.show_camera(cam) — live viewfinder as idle state
-#   5. Touch-poll loop
+#   1. Camera init (before screen import — camera must get GDMA channels first)
+#   2. Screen import (allocates I2S DMA on import, must come after camera)
+#   3. WiFi connect (before screen.init — display framebuffer starves WiFi DMA)
+#   4. screen.init(dir=2) + screen.stop_camera()
+#   5. screen.show_camera(cam) — live viewfinder as idle state
+#   6. Touch-poll loop
+#
+# IMPORTANT: after a soft-reset crash (Ctrl+D, brownout, or Guru Meditation),
+# the auto-reboot will fail with ENOMEM because GDMA channels are not released.
+# This is an ESP32-S3 limitation. Power cycle the device for a clean cold boot.
+# At the event, K10s will be powered on once and run all day — not an issue.
 #
 # Hardware constraints baked in:
 #   * camera_capture() -> 153600 bytes raw RGB565 (240x320)
-#   * screen.show_camera(cam) starts the viewfinder (NOT show_camera_feed — that's broken)
+#   * screen.show_camera(cam) starts the viewfinder (NOT show_camera_feed — broken)
 #   * camera_capture() works while the feed is running (no conflict)
 #   * Touch via FT6336 I2C @ 0x38 — independent of camera bus
 #   * A/B buttons unusable (share GPIO5/11 with camera parallel bus)
@@ -147,6 +153,7 @@ def boot():
     connected = wifi.status()
 
     screen.init(dir=SCREEN_DIR)
+    screen.stop_camera()
 
     if not connected:
         # Brief error shown before viewfinder starts
