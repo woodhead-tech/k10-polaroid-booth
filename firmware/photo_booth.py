@@ -42,11 +42,15 @@ from booth_config import SSID, PASSWORD, SERVER_URL, CAM_ID, EVENT
 _cam = Camera()
 _cam.init()
 
-# -- clear display to black (works before WiFi claims DMA) --
+# -- paint static ready screen (works before WiFi claims DMA) --
+# The LCD holds this framebuffer after deinit — stays visible while booth runs.
 from unihiker_k10 import screen  # noqa: E402
 screen.init(dir=2)
 screen.stop_camera()
-screen.show_bg(color=0x000000)
+screen.show_bg(color=0x0C0E1C)
+screen.draw_text(text="TAP TO SNAP", x=52, y=140, font_size=18, color=0xFFFFFF)
+screen.draw_text(text=CAM_ID, x=6, y=6, font_size=14, color=0xC9A227)
+screen.draw_text(text=EVENT[:20], x=6, y=296, font_size=14, color=0x505564)
 screen.show_draw()
 screen.deinit()
 del screen
