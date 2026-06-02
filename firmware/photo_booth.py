@@ -63,12 +63,12 @@ def show_ready(count=0):
     screen.show_bg(color=BG)
     screen.draw_text(text=CAM_ID, x=6, y=6, font_size=14, color=GOLD)
     if count == 0:
-        screen.draw_text(text="PRESS A", x=62, y=120, font_size=22, color=WHITE)
+        screen.draw_text(text="PRESS HOME", x=42, y=120, font_size=22, color=WHITE)
         screen.draw_text(text="TO SNAP", x=62, y=155, font_size=22, color=WHITE)
     else:
         screen.draw_text(text=f"{count}/{BATCH_SIZE}", x=90, y=110, font_size=28, color=WHITE)
         screen.draw_text(text="photos taken", x=58, y=155, font_size=16, color=GRAY)
-        screen.draw_text(text="press A for more", x=42, y=185, font_size=14, color=GOLD)
+        screen.draw_text(text="press HOME for more", x=30, y=185, font_size=14, color=GOLD)
     screen.draw_text(text=EVENT[:22], x=6, y=296, font_size=14, color=GRAY)
     screen.show_draw()
 
@@ -99,8 +99,8 @@ def show_uploading(n):
     screen.show_draw()
 
 
-# -- button --
-_btn_a = Pin(5, Pin.IN, Pin.PULL_UP)
+# -- button: HOME (GPIO0, active-LOW, no camera bus noise) --
+_btn = Pin(0, Pin.IN, Pin.PULL_UP)
 
 
 # -- upload --
@@ -188,8 +188,8 @@ print("booth ready -", CAM_ID)
 buffer = []
 
 while True:
-    # Wait for button press (rising edge only)
-    if _btn_a.value() == 1:
+    # HOME button: active-LOW (0 = pressed, 1 = released)
+    if _btn.value() == 0:
         show_flash()
         raw = _cam.camera_capture()
         buffer.append(raw)
@@ -200,8 +200,8 @@ while True:
             upload_and_reset(buffer)
         else:
             show_ready(count)
-        # Block until button fully released, then cooldown
-        while _btn_a.value() == 1:
+        # Wait for release + cooldown
+        while _btn.value() == 0:
             utime.sleep_ms(10)
-        utime.sleep_ms(500)
+        utime.sleep_ms(300)
     utime.sleep_ms(30)
