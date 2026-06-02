@@ -15,7 +15,16 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CAM_ID="${CAM_ID:-cam1}"
 
-echo "Flashing booth firmware — CAM_ID=${CAM_ID}"
+# Read WiFi creds from booth_config.py (gitignored — holds real passwords)
+CONFIG="${SCRIPT_DIR}/booth_config.py"
+if [ ! -f "$CONFIG" ]; then
+    echo "ERROR: $CONFIG not found. Copy booth_config.example.py and fill in SSID/PASSWORD."
+    exit 1
+fi
+SSID=$(grep -E '^SSID' "$CONFIG" | head -1 | sed 's/.*=\s*["'"'"']\(.*\)["'"'"'].*/\1/')
+PASSWORD=$(grep -E '^PASSWORD' "$CONFIG" | head -1 | sed 's/.*=\s*["'"'"']\(.*\)["'"'"'].*/\1/')
+
+echo "Flashing booth firmware — CAM_ID=${CAM_ID} SSID=${SSID}"
 
 python3 - << PYEOF
 import os, time, serial, http.server, threading, socket, re
@@ -84,7 +93,7 @@ import network, urequests, utime
 w = network.WLAN(network.STA_IF)
 w.active(True)
 if not w.isconnected():
-    w.connect('bluto', '1Pu113e@L1bby!')
+    w.connect('${SSID}', '${PASSWORD}')
     for _ in range(30):
         if w.isconnected(): break
         utime.sleep(1)

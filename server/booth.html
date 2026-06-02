@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ender's Party &mdash; Live Photo Booth</title>
+    <title>Ender's Graduation &mdash; Live Photo Booth</title>
     <style>
         :root {
             --navy:  #0d1520;
@@ -189,6 +189,21 @@
             letter-spacing: 0.04em;
         }
 
+        /* Camera flash overlay */
+        .flash-overlay {
+            position: fixed;
+            inset: 0;
+            background: white;
+            opacity: 0;
+            pointer-events: none;
+            z-index: 9999;
+            transition: opacity 0.05s;
+        }
+        .flash-overlay.fire {
+            opacity: 0.6;
+            transition: none;
+        }
+
         /* ── footer ── */
         .site-footer {
             position: relative;
@@ -222,10 +237,31 @@
     <main class="collage-grid" id="grid"></main>
 
     <div class="empty-state" id="emptyState">Waiting for the first photo&hellip;</div>
+    <div class="flash-overlay" id="flashOverlay"></div>
 
     <footer class="site-footer">
         Robert Ender Woodward &nbsp;&middot;&nbsp; Class of 2026
     </footer>
+
+    <!-- Fullscreen toggle (double-click anywhere or press F) -->
+    <script>
+        document.addEventListener('dblclick', function() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen().catch(function(){});
+            } else {
+                document.exitFullscreen();
+            }
+        });
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'f' || e.key === 'F') {
+                if (!document.fullscreenElement) {
+                    document.documentElement.requestFullscreen().catch(function(){});
+                } else {
+                    document.exitFullscreen();
+                }
+            }
+        });
+    </script>
 
     <script>
         var grid       = document.getElementById('grid');
@@ -233,7 +269,28 @@
         var photoCount = document.getElementById('photoCount');
         var wsDot      = document.getElementById('wsDot');
         var wsLabel    = document.getElementById('wsLabel');
+        var flashEl    = document.getElementById('flashOverlay');
         var count      = 0;
+
+        // Camera shutter sound (short click)
+        var audioCtx = null;
+        function playShutter() {
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            var osc = audioCtx.createOscillator();
+            var gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.frequency.value = 1200;
+            gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.08);
+            osc.start(audioCtx.currentTime);
+            osc.stop(audioCtx.currentTime + 0.08);
+        }
+
+        function fireFlash() {
+            flashEl.classList.add('fire');
+            setTimeout(function() { flashEl.classList.remove('fire'); }, 80);
+        }
 
         function setStatus(live, label) {
             wsDot.className  = 'ws-dot' + (live ? ' live' : '');
@@ -290,7 +347,12 @@
             ws.onmessage = function(ev) {
                 var data = JSON.parse(ev.data);
                 if (data.photo) {
-                    addPhoto(data.photo, data.cam || '', !data.existing);
+                    var isNew = !data.existing;
+                    addPhoto(data.photo, data.cam || '', isNew);
+                    if (isNew) {
+                        fireFlash();
+                        playShutter();
+                    }
                 }
             };
         }
