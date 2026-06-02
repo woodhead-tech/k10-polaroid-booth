@@ -209,7 +209,12 @@ async def upload(request: Request):
     body = await request.body()
     content_type = request.headers.get("content-type", "image/jpeg")
     cam_id = request.headers.get("X-Cam-Id", "cam0")
-    event = request.headers.get("X-Event", "Ender - Class of 2026")
+    event = request.headers.get("X-Event", "Ender's Graduation - June 2026")
+    # Fix encoding: K10 sends raw UTF-8 bytes which HTTP headers interpret as Latin-1
+    try:
+        event = event.encode("latin-1").decode("utf-8")
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        pass
     width = int(request.headers.get("X-Width", "240"))
     height = int(request.headers.get("X-Height", "320"))
 
@@ -228,11 +233,16 @@ async def upload(request: Request):
     polaroid = make_polaroid(final_img, event)
     filepath.write_bytes(polaroid)
 
-    # Also save the raw original (no frame) for reference
+    # Save the raw original (no frame, no style) for reference
     raw_path = PHOTOS_DIR / f"{ts}_{cam_id}_raw.jpg"
     raw_buf = io.BytesIO()
     img.save(raw_buf, "JPEG", quality=92)
     raw_path.write_bytes(raw_buf.getvalue())
+
+    # Save an unfiltered polaroid (frame only, no AI style) as backup
+    clean_polaroid = make_polaroid(img, event)
+    clean_path = PHOTOS_DIR / f"{ts}_{cam_id}_clean.jpg"
+    clean_path.write_bytes(clean_polaroid)
 
     await hub.broadcast({"photo": filename, "cam": cam_id})
     return {"ok": True, "filename": filename, "styled": styled_img is not None}
@@ -258,9 +268,9 @@ async def get_photo(filename: str):
 
 @app.get("/api/photos")
 async def list_photos():
-    # Only return polaroid frames (exclude _raw files)
+    # Only return styled polaroids (exclude _raw and _clean backups)
     photos = sorted(
-        [p for p in PHOTOS_DIR.glob("*.jpg") if "_raw" not in p.name],
+        [p for p in PHOTOS_DIR.glob("*.jpg") if "_raw" not in p.name and "_clean" not in p.name],
         key=lambda p: p.stat().st_mtime,
     )
     return [p.name for p in photos]
@@ -276,7 +286,7 @@ async def get_style():
 async def websocket_endpoint(ws: WebSocket):
     await hub.connect(ws)
     photos = sorted(
-        [p for p in PHOTOS_DIR.glob("*.jpg") if "_raw" not in p.name],
+        [p for p in PHOTOS_DIR.glob("*.jpg") if "_raw" not in p.name and "_clean" not in p.name],
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
