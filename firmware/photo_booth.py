@@ -169,6 +169,10 @@ while True:
             print(f"captured ({len(buffer)}/{BATCH_SIZE})")
             if len(buffer) >= BATCH_SIZE:
                 upload_and_reset(buffer)
+            # Debounce: wait for button to be released for 200ms
+            while _btn_a.value() == 1:
+                utime.sleep_ms(20)
+            utime.sleep_ms(200)
     else:
         armed = True
     utime.sleep_ms(40)
