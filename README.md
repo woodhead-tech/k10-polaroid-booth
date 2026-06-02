@@ -4,17 +4,31 @@ A DIY live photo booth built on the [UniHiker K10](https://www.dfrobot.com/produ
 
 Press a button and the K10 captures a photo, applies a polaroid-style frame, and it appears in a live gallery shown on any screen at the venue in seconds.
 
-## How it works
+## 🚀 Quick Start (Firmware)
 
-```
-[K10 cameras] --WiFi--> [Gallery server (laptop)] --WebSocket--> [Browser / TV / monitor]
-  short press = instant shot     FastAPI + Pillow                  live polaroid grid
-  long press  = 3-2-1 countdown  applies polaroid frame
-```
+1. **Prerequisites:** Install `mpremote` and `esptool`.
+2. **Flash:** If your K10 is fresh or bricked, flash the MicroPython image (v0.9.8+).
+3. **Configure:** Copy `firmware/booth_config.example.py` to `firmware/booth_config.py` and set your WiFi/Server details.
+4. **Deploy:**
+   ```bash
+   mpremote connect /dev/ttyACM0 cp photo_booth.py :main.py
+   mpremote connect /dev/ttyACM0 cp booth_config.py :booth_config.py
+   ```
 
-- **Short press** — instant capture and upload
-- **Long press (≥600ms)** — 3-2-1 countdown on the K10 screen, then capture
-- **Gallery** — photos appear in real time on any browser connected to the same network
+## 🖥️ Gallery Server
+
+The server is built with FastAPI and Pillow. It handles raw RGB565 decoding from the K10 camera and generates the polaroid-style JPEGs.
+
+**Note:** If you are using this in a production environment, use the server implementation found in the [graduation-site](https://github.com/woodhead-tech/graduation-site) repository (under `/booth`), which is the canonical version with optimized RGB565 support.
+
+## 🛠️ Hardware Insights
+
+The K10 is a powerful but nuanced board. Here are some hard-won facts:
+
+- **Buttons:** The A/B face buttons are shared with the camera's parallel bus; they are **unusable** once the camera is initialized. Use the touch screen or the HOME button for triggers.
+- **WiFi + Screen:** Initialize WiFi **before** calling `screen.init()`, or the display framebuffer will starve the WiFi DMA.
+- **DMA Races:** Manual screen draws (`draw_text`, etc.) can race with the camera's continuous DMA and cause hangs on cold boot. Use the viewfinder API for the most stable UI.
+- **Recovery:** If the device hangs, use `esptool` to erase and reflash. No physical boot button is required; the built-in USB-Serial-JTAG handles it.
 
 ## What's in this repo
 
