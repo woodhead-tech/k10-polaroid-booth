@@ -103,6 +103,48 @@ _btn_a = Pin(5, Pin.IN, Pin.PULL_UP)
 
 # -- upload batch --
 
+def _post_with_timeout(url, data, headers, timeout_ms=10000):
+    """POST with a real socket timeout. urequests doesn't support timeout."""
+    import usocket
+    # Parse URL
+    proto, _, host_port, path = url.split("/", 3)
+    path = "/" + path
+    if ":" in host_port:
+        host, port = host_port.split(":")
+        port = int(port)
+    else:
+        host, port = host_port, 80
+
+    addr = usocket.getaddrinfo(host, port)[0][-1]
+    sock = usocket.socket()
+    sock.settimeout(timeout_ms / 1000)
+    sock.connect(addr)
+
+    # Build HTTP request
+    content_len = len(data)
+    req = f"POST {path} HTTP/1.0\r\nHost: {host}\r\nContent-Length: {content_len}\r\n"
+    for k, v in headers.items():
+        req += f"{k}: {v}\r\n"
+    req += "\r\n"
+
+    sock.send(req.encode())
+    # Send body in chunks (153600 bytes is too large for one send)
+    mv = memoryview(data)
+    sent = 0
+    while sent < content_len:
+        chunk = mv[sent:sent + 4096]
+        sock.send(chunk)
+        sent += len(chunk)
+
+    # Read response status line
+    resp = b""
+    while b"\r\n" not in resp:
+        resp += sock.recv(128)
+    status = int(resp.split(b" ")[1])
+    sock.close()
+    return status
+
+
 def upload_batch(frames):
     """Connect WiFi, upload all frames, disconnect. Returns success count."""
     if not HAS_HTTP or not frames:
@@ -118,25 +160,23 @@ def upload_batch(frames):
 
         for raw in frames:
             try:
-                r = requests.post(
+                status = _post_with_timeout(
                     SERVER_URL + "/upload",
-                    data=raw,
-                    headers={
+                    raw,
+                    {
                         "Content-Type": "image/x-rgb565",
                         "X-Width": "240",
                         "X-Height": "320",
                         "X-Cam-Id": CAM_ID,
                         "X-Event": EVENT,
                     },
-                    timeout=30,
+                    timeout_ms=10000,
                 )
-                if r.status_code == 200:
+                if status == 200:
                     ok_count += 1
-                r.close()
             except Exception as e:
                 print("upload err:", e)
     finally:
-        # Always disconnect WiFi to free DMA, even on failure
         try:
             wlan = network.WLAN(network.STA_IF)
             wlan.disconnect()
