@@ -65,8 +65,20 @@ def _load_font(size: int):
     return ImageFont.load_default()
 
 
-def make_polaroid(jpeg_bytes: bytes, caption: str) -> bytes:
-    img = Image.open(io.BytesIO(jpeg_bytes)).convert("RGB")
+def decode_frame(body: bytes, content_type: str, width: int, height: int) -> Image.Image:
+    """Accept JPEG or raw RGB565 bytes from K10, return PIL Image."""
+    if "rgb565" in content_type:
+        # K10 camera_capture() returns raw BGR565 (little-endian)
+        img = Image.frombuffer("RGB", (width, height), body, "raw", "BGR;16", 0, 1)
+    else:
+        img = Image.open(io.BytesIO(body))
+    return img.convert("RGB")
+
+
+def make_polaroid(jpeg_bytes: bytes, caption: str,
+                  content_type: str = "image/jpeg",
+                  width: int = 240, height: int = 320) -> bytes:
+    img = decode_frame(jpeg_bytes, content_type, width, height)
 
     # Center-crop to 3:4 portrait
     w, h = img.size
@@ -103,15 +115,18 @@ def make_polaroid(jpeg_bytes: bytes, caption: str) -> bytes:
 
 @app.post("/upload")
 async def upload(request: Request):
-    jpeg_bytes = await request.body()
+    body = await request.body()
+    content_type = request.headers.get("content-type", "image/jpeg")
     cam_id = request.headers.get("X-Cam-Id", "cam0")
     event = request.headers.get("X-Event", "Ender · Class of 2026")
+    width = int(request.headers.get("X-Width", "240"))
+    height = int(request.headers.get("X-Height", "320"))
 
     ts = int(time.time() * 1000)
     filename = f"{ts}_{cam_id}.jpg"
     filepath = PHOTOS_DIR / filename
 
-    polaroid = make_polaroid(jpeg_bytes, event)
+    polaroid = make_polaroid(body, event, content_type, width, height)
     filepath.write_bytes(polaroid)
 
     await hub.broadcast({"photo": filename, "cam": cam_id})
