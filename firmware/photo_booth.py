@@ -59,6 +59,7 @@ screen.stop_camera()
 
 def show_ready(count=0):
     """Show idle screen with capture count."""
+    screen.clear()
     screen.show_bg(color=BG)
     screen.draw_text(text=CAM_ID, x=6, y=6, font_size=14, color=GOLD)
     if count == 0:
@@ -81,6 +82,7 @@ def show_flash():
 
 def show_captured(count):
     """Show capture confirmation."""
+    screen.clear()
     screen.show_bg(color=BG)
     screen.draw_text(text="SNAP!", x=78, y=130, font_size=24, color=GREEN)
     screen.draw_text(text=f"{count}/{BATCH_SIZE}", x=90, y=175, font_size=18, color=WHITE)
@@ -89,6 +91,7 @@ def show_captured(count):
 
 
 def show_uploading(n):
+    screen.clear()
     screen.show_bg(color=BG)
     screen.draw_text(text=f"uploading {n}", x=46, y=H // 2 - 30, font_size=18, color=GOLD)
     screen.draw_text(text="photos...", x=68, y=H // 2 + 5, font_size=16, color=GOLD)
