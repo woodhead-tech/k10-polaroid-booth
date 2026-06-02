@@ -1,14 +1,15 @@
-# UniHiker K10 — Polaroid Photo Booth (viewfinder + batched upload)
+# UniHiker K10 — Polaroid Photo Booth (static screen + batched upload)
 # MicroPython (k10_micropython_v0.9.8 / MicroPython 1.26). Deploy as /main.py.
 #
-# PRESS BUTTON A to capture. Live viewfinder on screen for first batch.
-# Every 5 captures: stop viewfinder → upload → soft reset for clean state.
-# Each boot cycle gives a fresh viewfinder for the next batch.
+# PRESS BUTTON A to capture. Screen shows status and last capture preview.
+# Every 5 captures: upload batch → machine.reset() for clean state.
 #
-# Why reset after upload: screen.deinit() is required to free DMA for WiFi,
-# but screen.init() hangs on re-initialization (singleton state corruption).
-# A machine.reset() gives a clean cold boot with viewfinder for the next batch.
-# This takes ~8s (boot guard + WiFi connect + upload + reset + boot).
+# Screen states:
+#   - Boot: "PRESS A TO SNAP" with cam ID and event
+#   - After capture: shows the captured image briefly, then "X/5" counter
+#   - Upload: "uploading N photos..."
+#
+# No live viewfinder (too laggy on this hardware). Static UI only.
 
 import utime
 import sys
@@ -41,40 +42,65 @@ BATCH_SIZE = 5
 _cam = Camera()
 _cam.init()
 
-# -- screen + viewfinder --
+# -- screen --
 from unihiker_k10 import screen  # noqa: E402
 
 BG    = 0x0C0E1C
 WHITE = 0xFFFFFF
 GOLD  = 0xC9A227
 GREEN = 0x3CDC78
+RED   = 0xE63C3C
 GRAY  = 0x505564
 W, H  = 240, 320
 
 screen.init(dir=2)
 screen.stop_camera()
-screen.show_camera(_cam)
+
+
+def show_ready(count=0):
+    """Show idle screen with capture count."""
+    screen.show_bg(color=BG)
+    screen.draw_text(text=CAM_ID, x=6, y=6, font_size=14, color=GOLD)
+    if count == 0:
+        screen.draw_text(text="PRESS A", x=62, y=120, font_size=22, color=WHITE)
+        screen.draw_text(text="TO SNAP", x=62, y=155, font_size=22, color=WHITE)
+    else:
+        screen.draw_text(text=f"{count}/{BATCH_SIZE}", x=90, y=110, font_size=28, color=WHITE)
+        screen.draw_text(text="photos taken", x=58, y=155, font_size=16, color=GRAY)
+        screen.draw_text(text="press A for more", x=42, y=185, font_size=14, color=GOLD)
+    screen.draw_text(text=EVENT[:22], x=6, y=296, font_size=14, color=GRAY)
+    screen.show_draw()
+
+
+def show_flash():
+    """Brief white flash."""
+    screen.show_bg(color=WHITE)
+    screen.show_draw()
+    utime.sleep_ms(80)
+
+
+def show_captured(count):
+    """Show capture confirmation."""
+    screen.show_bg(color=BG)
+    screen.draw_text(text="SNAP!", x=78, y=130, font_size=24, color=GREEN)
+    screen.draw_text(text=f"{count}/{BATCH_SIZE}", x=90, y=175, font_size=18, color=WHITE)
+    screen.show_draw()
+    utime.sleep_ms(600)
+
+
+def show_uploading(n):
+    screen.show_bg(color=BG)
+    screen.draw_text(text=f"uploading {n}", x=46, y=H // 2 - 30, font_size=18, color=GOLD)
+    screen.draw_text(text="photos...", x=68, y=H // 2 + 5, font_size=16, color=GOLD)
+    screen.draw_text(text="please wait", x=58, y=H // 2 + 40, font_size=14, color=GRAY)
+    screen.show_draw()
+
 
 # -- button --
 _btn_a = Pin(5, Pin.IN, Pin.PULL_UP)
 
 
-def flash_screen():
-    """Brief white flash feedback."""
-    screen.stop_camera()
-    screen.show_bg(color=WHITE)
-    screen.show_draw()
-    utime.sleep_ms(60)
-    screen.show_camera(_cam)
-
-
-def show_uploading(n):
-    screen.stop_camera()
-    screen.show_bg(color=BG)
-    screen.draw_text(text=f"uploading {n} photos", x=24, y=H // 2 - 20, font_size=16, color=GOLD)
-    screen.draw_text(text="please wait...", x=54, y=H // 2 + 10, font_size=14, color=GRAY)
-    screen.show_draw()
-
+# -- upload --
 
 def _post(url, data, headers, timeout_s=10):
     """POST with socket-level timeout."""
@@ -115,7 +141,7 @@ def _post(url, data, headers, timeout_s=10):
 
 
 def upload_and_reset(frames):
-    """Deinit screen, connect WiFi, upload, then reset for fresh viewfinder."""
+    """Deinit screen, connect WiFi, upload, then reset."""
     show_uploading(len(frames))
     screen.deinit()
     utime.sleep_ms(200)
@@ -149,12 +175,12 @@ def upload_and_reset(frames):
     except Exception as e:
         print("batch err:", e)
 
-    # Reset for a fresh viewfinder on next boot
     utime.sleep_ms(500)
     machine.reset()
 
 
 # -- main loop --
+show_ready(0)
 print("booth ready -", CAM_ID)
 buffer = []
 armed = True
@@ -163,13 +189,17 @@ while True:
     if _btn_a.value() == 1:
         if armed:
             armed = False
+            show_flash()
             raw = _cam.camera_capture()
             buffer.append(raw)
-            flash_screen()
-            print(f"captured ({len(buffer)}/{BATCH_SIZE})")
-            if len(buffer) >= BATCH_SIZE:
+            count = len(buffer)
+            print(f"captured ({count}/{BATCH_SIZE})")
+            show_captured(count)
+            if count >= BATCH_SIZE:
                 upload_and_reset(buffer)
-            # Debounce: wait for button to be released for 200ms
+            else:
+                show_ready(count)
+            # Debounce: wait for release + cooldown
             while _btn_a.value() == 1:
                 utime.sleep_ms(20)
             utime.sleep_ms(200)
