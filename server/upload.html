@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Ender's Graduation &mdash; Photo Booth</title>
+    <style>
+        :root {
+            --navy:  #0d1520;
+            --navy2: #111e2e;
+            --gold:  #c9a227;
+            --gold2: #e2b83a;
+            --white: #ffffff;
+        }
+
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        html { -webkit-font-smoothing: antialiased; height: 100%; }
+
+        body {
+            background: var(--navy);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            min-height: 100%;
+            min-height: 100dvh;
+            display: flex;
+            flex-direction: column;
+            color: var(--white);
+            /* star field */
+            background-image:
+                radial-gradient(rgba(201,162,39,0.07) 1px, transparent 1px),
+                radial-gradient(rgba(255,255,255,0.025) 1px, transparent 1px);
+            background-size: 40px 40px, 22px 22px;
+            background-position: 0 0, 11px 11px;
+        }
+
+        /* ── header ── */
+        .site-header {
+            padding: 28px 24px 20px;
+            text-align: center;
+            border-bottom: 1px solid rgba(201,162,39,0.15);
+            flex-shrink: 0;
+        }
+
+        .header-title {
+            font-family: Georgia, 'Times New Roman', serif;
+            font-size: clamp(1.3rem, 5vw, 1.9rem);
+            font-weight: 400;
+            color: var(--white);
+            line-height: 1.1;
+        }
+
+        .header-rule {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            margin: 10px auto 0;
+            max-width: 220px;
+        }
+        .h-line    { flex: 1; height: 1px; background: rgba(201,162,39,0.35); }
+        .h-diamond { color: var(--gold); font-size: 0.55rem; }
+
+        /* ── main content area ── */
+        main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 32px 24px 48px;
+        }
+
+        /* ── state panels (only one visible at a time) ── */
+        .panel { display: none; flex-direction: column; align-items: center; width: 100%; max-width: 420px; gap: 20px; }
+        body.s-capture   #panel-capture   { display: flex; }
+        body.s-preview   #panel-preview   { display: flex; }
+        body.s-uploading #panel-uploading { display: flex; }
+        body.s-success   #panel-success   { display: flex; }
+
+        /* ── capture state ── */
+        .camera-icon {
+            color: var(--gold);
+            opacity: 0.85;
+            margin-bottom: 8px;
+        }
+
+        .btn-capture-label {
+            display: block;
+            width: 100%;
+            padding: 18px 24px;
+            background: var(--gold);
+            color: var(--navy);
+            font-size: 1.05rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-align: center;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.15s, transform 0.1s;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .btn-capture-label:active {
+            background: var(--gold2);
+            transform: scale(0.98);
+        }
+
+        .capture-hint {
+            font-size: 0.8rem;
+            color: rgba(255,255,255,0.35);
+            text-align: center;
+            letter-spacing: 0.04em;
+        }
+
+        .gallery-link {
+            margin-top: 16px;
+            font-size: 0.78rem;
+            color: rgba(201,162,39,0.55);
+            text-decoration: none;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            transition: color 0.15s;
+        }
+        .gallery-link:hover { color: var(--gold); }
+
+        /* ── preview state ── */
+        .polaroid-frame {
+            background: var(--white);
+            padding: 10px 10px 42px;
+            border-radius: 2px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.3);
+            width: 100%;
+            max-width: 340px;
+            transform: rotate(-1.5deg);
+        }
+        .polaroid-frame img {
+            width: 100%;
+            display: block;
+            aspect-ratio: 3/4;
+            object-fit: cover;
+            border-radius: 1px;
+            background: #eee;
+        }
+        .polaroid-caption {
+            text-align: center;
+            font-size: 0.7rem;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: #999;
+            margin-top: 10px;
+        }
+
+        .name-field {
+            width: 100%;
+            padding: 14px 16px;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(201,162,39,0.25);
+            border-radius: 8px;
+            color: var(--white);
+            font-size: 1rem;
+            outline: none;
+            transition: border-color 0.2s;
+            -webkit-appearance: none;
+        }
+        .name-field:focus { border-color: rgba(201,162,39,0.7); }
+        .name-field::placeholder { color: rgba(255,255,255,0.3); }
+
+        .error-msg {
+            font-size: 0.82rem;
+            color: #f87171;
+            text-align: center;
+            min-height: 1.2em;
+        }
+
+        /* ── buttons ── */
+        .btn-primary {
+            display: block;
+            width: 100%;
+            padding: 16px 24px;
+            background: var(--gold);
+            color: var(--navy);
+            font-size: 1rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-align: center;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background 0.15s, transform 0.1s;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .btn-primary:active { background: var(--gold2); transform: scale(0.98); }
+        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .btn-ghost {
+            background: none;
+            border: none;
+            color: rgba(255,255,255,0.4);
+            font-size: 0.85rem;
+            cursor: pointer;
+            padding: 8px;
+            letter-spacing: 0.04em;
+            transition: color 0.15s;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .btn-ghost:hover { color: rgba(255,255,255,0.7); }
+
+        /* ── uploading state ── */
+        .spinner {
+            width: 52px; height: 52px;
+            border: 3px solid rgba(201,162,39,0.2);
+            border-top-color: var(--gold);
+            border-radius: 50%;
+            animation: spin 0.85s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .uploading-text {
+            font-size: 0.95rem;
+            color: rgba(255,255,255,0.55);
+            letter-spacing: 0.06em;
+        }
+
+        /* ── success state ── */
+        .check-ring {
+            width: 72px; height: 72px;
+            border-radius: 50%;
+            border: 2px solid rgba(201,162,39,0.4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            animation: pop-in 0.4s cubic-bezier(0.22,1,0.36,1) forwards;
+        }
+        @keyframes pop-in {
+            from { transform: scale(0.6); opacity: 0; }
+            to   { transform: scale(1);   opacity: 1; }
+        }
+
+        .success-title {
+            font-family: Georgia, serif;
+            font-size: 1.5rem;
+            font-weight: 400;
+            text-align: center;
+            color: var(--white);
+        }
+
+        .success-sub {
+            font-size: 0.88rem;
+            color: rgba(255,255,255,0.45);
+            text-align: center;
+            letter-spacing: 0.04em;
+            line-height: 1.5;
+        }
+
+        /* ── footer ── */
+        .site-footer {
+            text-align: center;
+            padding: 16px 24px 28px;
+            border-top: 1px solid rgba(201,162,39,0.08);
+            font-family: Georgia, serif;
+            font-style: italic;
+            color: rgba(255,255,255,0.2);
+            font-size: 0.78rem;
+            flex-shrink: 0;
+        }
+    </style>
+</head>
+<body class="s-capture">
+
+    <header class="site-header">
+        <h1 class="header-title">Ender&rsquo;s Graduation<br><span style="font-size:0.65em;color:rgba(255,255,255,0.5);letter-spacing:0.14em;font-style:normal;font-family:system-ui,sans-serif;text-transform:uppercase">Live Photo Booth</span></h1>
+        <div class="header-rule">
+            <span class="h-line"></span>
+            <span class="h-diamond">&#10022;</span>
+            <span class="h-line"></span>
+        </div>
+    </header>
+
+    <main>
+
+        <!-- State: capture -->
+        <section class="panel" id="panel-capture">
+            <div class="camera-icon">
+                <svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 24 24"
+                     fill="none" stroke="currentColor" stroke-width="1.25"
+                     stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                    <circle cx="12" cy="13" r="4"/>
+                </svg>
+            </div>
+
+            <label class="btn-capture-label" for="photo-input">
+                Take or Choose a Photo
+            </label>
+            <input type="file" id="photo-input" accept="image/*" hidden>
+
+            <p class="capture-hint">Your phone will offer Camera or Gallery</p>
+            <a href="/booth.html" class="gallery-link">View Live Gallery &rarr;</a>
+        </section>
+
+        <!-- State: preview -->
+        <section class="panel" id="panel-preview">
+            <div class="polaroid-frame">
+                <img id="preview-img" alt="Your photo preview">
+                <p class="polaroid-caption" id="polaroid-caption">Ender&rsquo;s Graduation &middot; June 2026</p>
+            </div>
+
+            <input
+                type="text"
+                id="name-input"
+                class="name-field"
+                placeholder="Your name (optional)"
+                maxlength="40"
+                autocomplete="name"
+                inputmode="text"
+            >
+
+            <p class="error-msg" id="error-msg"></p>
+
+            <button class="btn-primary" id="submit-btn">Add to Gallery &rarr;</button>
+            <button class="btn-ghost" id="retake-btn">Retake</button>
+        </section>
+
+        <!-- State: uploading -->
+        <section class="panel" id="panel-uploading">
+            <div class="spinner"></div>
+            <p class="uploading-text">Processing your photo&hellip;</p>
+        </section>
+
+        <!-- State: success -->
+        <section class="panel" id="panel-success">
+            <div class="check-ring">
+                <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24"
+                     fill="none" stroke="#c9a227" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="20 6 9 17 4 12"/>
+                </svg>
+            </div>
+            <h2 class="success-title">You&rsquo;re in the gallery!</h2>
+            <p class="success-sub">Check the big screen to see your photo appear.</p>
+            <button class="btn-primary" id="another-btn">Add Another Photo</button>
+            <a href="/booth.html" class="gallery-link">View Gallery &rarr;</a>
+        </section>
+
+    </main>
+
+    <footer class="site-footer">
+        Robert Ender Woodward &nbsp;&middot;&nbsp; Class of 2026
+    </footer>
+
+    <!-- Hidden canvas for client-side resize -->
+    <canvas id="resize-canvas" hidden></canvas>
+
+    <script>
+        var MAX_DIM  = 1600;
+        var JPEG_Q   = 0.92;
+        var EVENT_HDR = "Ender’s Graduation · June 2026";
+
+        var canvas      = document.getElementById('resize-canvas');
+        var ctx         = canvas.getContext('2d');
+        var photoInput  = document.getElementById('photo-input');
+        var previewImg  = document.getElementById('preview-img');
+        var polCaption  = document.getElementById('polaroid-caption');
+        var nameInput   = document.getElementById('name-input');
+        var errorMsg    = document.getElementById('error-msg');
+        var submitBtn   = document.getElementById('submit-btn');
+        var retakeBtn   = document.getElementById('retake-btn');
+        var anotherBtn  = document.getElementById('another-btn');
+
+        function setState(s) {
+            document.body.className = 's-' + s;
+        }
+
+        function setError(msg) {
+            errorMsg.textContent = msg || '';
+        }
+
+        // Load file into canvas (resize if needed), update preview
+        function loadFile(file) {
+            if (!file) return;
+            setError('');
+
+            var url = URL.createObjectURL(file);
+            var img = new Image();
+
+            img.onload = function() {
+                URL.revokeObjectURL(url);
+
+                var w = img.naturalWidth, h = img.naturalHeight;
+                if (w > MAX_DIM || h > MAX_DIM) {
+                    if (w >= h) { h = Math.round(h * MAX_DIM / w); w = MAX_DIM; }
+                    else        { w = Math.round(w * MAX_DIM / h); h = MAX_DIM; }
+                }
+                canvas.width  = w;
+                canvas.height = h;
+                ctx.drawImage(img, 0, 0, w, h);
+
+                // Use canvas data as preview so we see the exact bytes we'll upload
+                previewImg.src = canvas.toDataURL('image/jpeg', JPEG_Q);
+                setState('preview');
+            };
+
+            img.onerror = function() {
+                URL.revokeObjectURL(url);
+                setError('Could not read that image. Please try another.');
+            };
+
+            img.src = url;
+        }
+
+        // Upload canvas contents as JPEG
+        async function doUpload() {
+            var name = nameInput.value.trim();
+
+            submitBtn.disabled = true;
+            setError('');
+            setState('uploading');
+
+            try {
+                var blob = await new Promise(function(resolve) {
+                    canvas.toBlob(resolve, 'image/jpeg', JPEG_Q);
+                });
+
+                var res = await fetch('/upload', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'image/jpeg',
+                        'X-Cam-Id':  name || 'guest',
+                        'X-Event':   EVENT_HDR,
+                    },
+                    body: blob,
+                });
+
+                if (!res.ok) throw new Error('Server error ' + res.status);
+
+                setState('success');
+            } catch (err) {
+                setState('preview');
+                setError('Upload failed — check your connection and try again.');
+                console.error(err);
+            } finally {
+                submitBtn.disabled = false;
+            }
+        }
+
+        function resetToCapture() {
+            photoInput.value = '';
+            nameInput.value  = '';
+            setError('');
+            setState('capture');
+        }
+
+        // Update the polaroid caption preview as name is typed
+        nameInput.addEventListener('input', function() {
+            var v = nameInput.value.trim();
+            polCaption.textContent = v || EVENT_HDR;
+        });
+
+        photoInput.addEventListener('change', function() {
+            loadFile(this.files[0]);
+        });
+
+        submitBtn.addEventListener('click', doUpload);
+        retakeBtn.addEventListener('click', resetToCapture);
+        anotherBtn.addEventListener('click', resetToCapture);
+    </script>
+</body>
+</html>

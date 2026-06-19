@@ -1,4 +1,5 @@
 import asyncio
+import datetime
 import io
 import json
 import os
@@ -7,8 +8,9 @@ import time
 from pathlib import Path
 from typing import List
 
+import httpx
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from PIL import Image, ImageDraw, ImageFont
 
 app = FastAPI()
@@ -17,6 +19,12 @@ PHOTOS_DIR = Path(__file__).parent / "photos"
 PHOTOS_DIR.mkdir(exist_ok=True)
 
 STATIC_DIR = Path(__file__).parent
+
+# Phone photos can be 8MP+; cap before polaroid processing to keep things fast
+MAX_UPLOAD_DIM = 2000
+
+# Cam IDs that are placeholders, not real names
+_DEFAULT_CAM_IDS = {"cam0", "cam1", "cam2", "guest", ""}
 
 # -- AI style processing (optional — set GEMINI_API_KEY to enable) --
 STYLE_ENABLED = False
@@ -40,6 +48,152 @@ try:
         print("[style] GEMINI_API_KEY not set — AI style disabled, using polaroid frame only")
 except ImportError:
     print("[style] google-genai not installed — AI style disabled")
+
+
+# -- Immich integration --
+
+IMMICH_URL        = os.getenv("IMMICH_URL", "http://192.168.86.55:2283").rstrip("/")
+IMMICH_API_KEY    = os.getenv("IMMICH_API_KEY", "")
+IMMICH_ALBUM_PFX  = os.getenv("IMMICH_ALBUM_PREFIX", "Booth")
+IMMICH_DISK_WRITE = os.getenv("IMMICH_DISK_WRITE", "true").lower() == "true"
+IMMICH_SLIDESHOW  = os.getenv("IMMICH_SLIDESHOW", "false").lower() == "true"
+IMMICH_ENABLED    = bool(IMMICH_API_KEY)
+
+if IMMICH_ENABLED:
+    print(f"[immich] enabled → {IMMICH_URL}  disk_write={IMMICH_DISK_WRITE}  slideshow={IMMICH_SLIDESHOW}")
+else:
+    print("[immich] disabled (IMMICH_API_KEY not set)")
+
+
+class ImmichClient:
+    """Thin async client for Immich v2 REST API."""
+
+    def __init__(self, base_url: str, api_key: str):
+        self._base = base_url
+        self._headers = {"x-api-key": api_key, "Accept": "application/json"}
+        # album_name -> album_id, populated lazily and cached for process lifetime
+        self._album_cache: dict[str, str] = {}
+
+    async def upload_asset(
+        self,
+        image_bytes: bytes,
+        filename: str,
+        device_asset_id: str | None = None,
+        created_at: str | None = None,
+    ) -> str:
+        """Upload JPEG to Immich. Returns asset ID. 200 with duplicate:true is fine."""
+        now_iso = (
+            created_at
+            or datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+        )
+        asset_id = device_asset_id or filename
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(
+                f"{self._base}/api/assets",
+                headers=self._headers,
+                files={"assetData": (filename, image_bytes, "image/jpeg")},
+                data={
+                    "deviceAssetId":  asset_id,
+                    "deviceId":       "booth-app",
+                    "fileCreatedAt":  now_iso,
+                    "fileModifiedAt": now_iso,
+                },
+            )
+        if r.status_code not in (200, 201):
+            raise RuntimeError(f"[immich] upload failed {r.status_code}: {r.text[:200]}")
+        return r.json()["id"]
+
+    async def get_or_create_album(self, album_name: str) -> str:
+        """Return album ID, creating it if not found. Result is cached in-memory."""
+        if album_name in self._album_cache:
+            return self._album_cache[album_name]
+
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(
+                f"{self._base}/api/albums",
+                headers=self._headers,
+                params={"shared": "false"},
+            )
+        if r.status_code != 200:
+            raise RuntimeError(f"[immich] list albums failed {r.status_code}")
+
+        for album in r.json():
+            if album.get("albumName") == album_name:
+                self._album_cache[album_name] = album["id"]
+                print(f"[immich] found existing album '{album_name}' → {album['id']}")
+                return album["id"]
+
+        # Not found — create it
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(
+                f"{self._base}/api/albums",
+                headers={**self._headers, "Content-Type": "application/json"},
+                json={"albumName": album_name},
+            )
+        if r.status_code not in (200, 201):
+            raise RuntimeError(f"[immich] create album failed {r.status_code}")
+        album_id = r.json()["id"]
+        self._album_cache[album_name] = album_id
+        print(f"[immich] created album '{album_name}' → {album_id}")
+        return album_id
+
+    async def add_to_album(self, album_id: str, asset_ids: list[str]) -> None:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.put(
+                f"{self._base}/api/albums/{album_id}/assets",
+                headers={**self._headers, "Content-Type": "application/json"},
+                json={"ids": asset_ids},
+            )
+        if r.status_code not in (200, 201):
+            raise RuntimeError(f"[immich] add to album failed {r.status_code}")
+
+    async def list_album_assets(self, album_name: str) -> list[dict]:
+        """Return asset list for the slideshow proxy. Returns [] on any error."""
+        try:
+            album_id = await self.get_or_create_album(album_name)
+        except Exception:
+            return []
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(f"{self._base}/api/albums/{album_id}", headers=self._headers)
+        if r.status_code != 200:
+            return []
+        return r.json().get("assets", [])
+
+    async def get_asset_preview(self, asset_id: str) -> bytes:
+        """Fetch full-size JPEG preview bytes for the proxy route."""
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(
+                f"{self._base}/api/assets/{asset_id}/thumbnail",
+                headers=self._headers,
+                params={"size": "preview"},
+            )
+        r.raise_for_status()
+        return r.content
+
+
+# Singleton — only created when IMMICH_API_KEY is set
+immich: ImmichClient | None = (
+    ImmichClient(IMMICH_URL, IMMICH_API_KEY) if IMMICH_ENABLED else None
+)
+
+
+def _today_album_name() -> str:
+    return f"{IMMICH_ALBUM_PFX} - {datetime.date.today().isoformat()}"
+
+
+async def _upload_to_immich(image_bytes: bytes, filename: str, album_name: str) -> str | None:
+    """Upload bytes to Immich and add to the event album. Fire-and-forget safe."""
+    if not immich:
+        return None
+    try:
+        asset_id = await immich.upload_asset(image_bytes, filename)
+        album_id = await immich.get_or_create_album(album_name)
+        await immich.add_to_album(album_id, [asset_id])
+        print(f"[immich] uploaded {filename} → asset {asset_id}")
+        return asset_id
+    except Exception as e:
+        print(f"[immich] upload error for {filename}: {e}")
+        return None
 
 
 # -- WebSocket hub --
@@ -221,39 +375,67 @@ async def upload(request: Request):
     ts = int(time.time() * 1000)
     filename = f"{ts}_{cam_id}.jpg"
     filepath = PHOTOS_DIR / filename
+    album_name = _today_album_name()
 
     # Decode the raw frame
     img = decode_frame(body, content_type, width, height)
 
-    # Save raw original immediately
-    raw_path = PHOTOS_DIR / f"{ts}_{cam_id}_raw.jpg"
+    # Resize phone photos — polaroid only needs 600px, no need to process 4K images
+    if max(img.size) > MAX_UPLOAD_DIM:
+        img.thumbnail((MAX_UPLOAD_DIM, MAX_UPLOAD_DIM), Image.LANCZOS)
+
+    # Use uploader's name as the polaroid caption when it looks like a real name
+    caption = cam_id if cam_id not in _DEFAULT_CAM_IDS else event
+
+    # -- raw variant --
+    raw_filename = f"{ts}_{cam_id}_raw.jpg"
     raw_buf = io.BytesIO()
     img.save(raw_buf, "JPEG", quality=92)
-    raw_path.write_bytes(raw_buf.getvalue())
+    raw_bytes = raw_buf.getvalue()
 
-    # Save clean polaroid (frame only, no style) immediately
-    clean_polaroid = make_polaroid(img, event)
-    clean_path = PHOTOS_DIR / f"{ts}_{cam_id}_clean.jpg"
-    clean_path.write_bytes(clean_polaroid)
+    if IMMICH_DISK_WRITE:
+        (PHOTOS_DIR / raw_filename).write_bytes(raw_bytes)
 
-    # Write clean polaroid as the initial gallery version (instant feedback)
-    filepath.write_bytes(clean_polaroid)
+    # -- clean polaroid (immediate; no AI style) --
+    clean_polaroid = make_polaroid(img, caption)
+    clean_filename = f"{ts}_{cam_id}_clean.jpg"
+
+    if IMMICH_DISK_WRITE:
+        (PHOTOS_DIR / clean_filename).write_bytes(clean_polaroid)
+        filepath.write_bytes(clean_polaroid)
+
+    # Upload both variants to Immich (non-blocking; errors logged, never raised)
+    asyncio.create_task(_upload_to_immich(raw_bytes,      raw_filename,   album_name))
+    asyncio.create_task(_upload_to_immich(clean_polaroid, clean_filename, album_name))
+
     await hub.broadcast({"photo": filename, "cam": cam_id})
 
-    # Apply AI style in background — overwrites the gallery file when done
-    asyncio.create_task(_style_and_replace(img, event, filepath, filename, cam_id))
+    # Apply AI style in background — overwrites the gallery file and uploads styled version
+    asyncio.create_task(_style_and_replace(img, caption, filepath, filename, cam_id, album_name))
 
     return {"ok": True, "filename": filename}
 
 
-async def _style_and_replace(img: Image.Image, event: str, filepath: Path, filename: str, cam_id: str):
-    """Background task: apply AI style and replace the gallery polaroid."""
+async def _style_and_replace(
+    img: Image.Image,
+    event: str,
+    filepath: Path,
+    filename: str,
+    cam_id: str,
+    album_name: str,
+):
+    """Background task: apply AI style, write to disk/Immich, notify gallery."""
     try:
         styled_img = await apply_ai_style(img)
         if styled_img is not None:
             polaroid = make_polaroid(styled_img, event)
-            filepath.write_bytes(polaroid)
-            # Notify gallery to refresh this photo
+
+            if IMMICH_DISK_WRITE:
+                filepath.write_bytes(polaroid)
+
+            # Upload the AI-styled polaroid as the canonical gallery asset
+            asyncio.create_task(_upload_to_immich(polaroid, filename, album_name))
+
             await hub.broadcast({"photo": filename, "cam": cam_id, "updated": True})
     except Exception as e:
         print(f"[style-bg] error: {e}")
@@ -261,12 +443,22 @@ async def _style_and_replace(img: Image.Image, event: str, filepath: Path, filen
 
 @app.get("/")
 async def root():
-    return RedirectResponse("/booth.html")
+    return RedirectResponse("/upload.html")
+
+
+@app.get("/upload.html")
+async def upload_page():
+    return FileResponse(STATIC_DIR / "upload.html")
 
 
 @app.get("/booth.html")
 async def booth_page():
     return FileResponse(STATIC_DIR / "booth.html")
+
+
+@app.get("/slideshow.html")
+async def slideshow_page():
+    return FileResponse(STATIC_DIR / "slideshow.html")
 
 
 @app.get("/photos/{filename}")
@@ -285,6 +477,60 @@ async def list_photos():
         key=lambda p: p.stat().st_mtime,
     )
     return [p.name for p in photos]
+
+
+@app.get("/api/album")
+async def get_album():
+    """Slideshow proxy: returns Immich album asset list with server-side auth injection."""
+    if not immich:
+        return {"album_ok": False, "photos": []}
+    album_name = _today_album_name()
+    try:
+        assets = await immich.list_album_assets(album_name)
+    except Exception as e:
+        print(f"[immich] list_album_assets error: {e}")
+        return {"album_ok": False, "photos": []}
+
+    photos = []
+    for a in assets:
+        fname = a.get("originalFileName", "")
+        # Slideshow only shows styled polaroids; raw and clean are Immich archive variants
+        if "_raw" in fname or "_clean" in fname:
+            continue
+        try:
+            ts = int(
+                datetime.datetime.fromisoformat(
+                    a["fileCreatedAt"].replace("Z", "+00:00")
+                ).timestamp() * 1000
+            )
+        except Exception:
+            ts = 0
+        photos.append({
+            "id":        a["id"],
+            "url":       f"/api/photo-proxy/{a['id']}",
+            "timestamp": ts,
+            "caption":   a.get("exifInfo", {}).get("description", ""),
+        })
+
+    photos.sort(key=lambda p: p["timestamp"])
+    return {"album_ok": True, "photos": photos}
+
+
+@app.get("/api/photo-proxy/{asset_id}")
+async def photo_proxy(asset_id: str):
+    """Server-side proxy for Immich thumbnails — keeps API key off the browser."""
+    if not immich:
+        return HTMLResponse("Immich not configured", status_code=503)
+    try:
+        data = await immich.get_asset_preview(asset_id)
+        return Response(
+            content=data,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "max-age=3600"},
+        )
+    except Exception as e:
+        print(f"[immich] photo-proxy error for {asset_id}: {e}")
+        return HTMLResponse("proxy error", status_code=502)
 
 
 @app.get("/api/style")

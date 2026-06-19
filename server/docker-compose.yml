@@ -1,0 +1,15 @@
+services:
+  booth:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8088:8080"
+    volumes:
+      - ./photos:/app/photos
+    environment:
+      GEMINI_API_KEY:      "${GEMINI_API_KEY:-}"
+      IMMICH_API_KEY:      "${IMMICH_API_KEY:-}"
+      IMMICH_URL:          "${IMMICH_URL:-http://192.168.86.55:2283}"
+      IMMICH_ALBUM_PREFIX: "${IMMICH_ALBUM_PREFIX:-Booth}"
+      IMMICH_DISK_WRITE:   "${IMMICH_DISK_WRITE:-true}"
+      IMMICH_SLIDESHOW:    "${IMMICH_SLIDESHOW:-false}"
